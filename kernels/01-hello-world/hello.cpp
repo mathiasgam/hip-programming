@@ -9,7 +9,7 @@ int main(void)
     int device = 0;
     result = hipGetDevice(&device);
 
-    printf("Hello! I'm GPU %d out of %d GPUs in total.\n", device, count);
+    printf("Hello! I am GPU %d out of %d GPUs in total.\n", device, count);
 
     return 0;
 }
