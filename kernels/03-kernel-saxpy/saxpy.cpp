@@ -40,6 +40,13 @@ thread?
   - Remember the grid, block, thread hierarchy and the launch parameters
 */
 
+__global__ void saxpy_kernel(float* out, const float* x, const float* y, const float a, const int n) {
+  const int i = threadIdx.x + blockIdx.x * blockDim.x;
+  if (i < n) {
+    out[i] = a * x[i] + y[i];
+  }
+}
+
 int main() {
     // Use HIP_ERRCHK to help you find any errors you make with the API calls
 
@@ -65,16 +72,30 @@ int main() {
     // TODO: Allocate + copy initial values
     // - hipMalloc, hipMemcpy
 
+    float* d_x = nullptr;
+    float* d_y = nullptr;
+    HIP_ERRCHK(hipMalloc(&d_x, num_bytes));
+    HIP_ERRCHK(hipMalloc(&d_y, num_bytes));
+    HIP_ERRCHK(hipMemcpy(d_x, x.data(), num_bytes, hipMemcpyHostToDevice));
+    HIP_ERRCHK(hipMemcpy(d_y, y.data(), num_bytes, hipMemcpyHostToDevice));
+
     // TODO: Define grid dimensions + launch the device kernel
     // int/dim3 threads = ...
     // int/dim3 blocks = ...
     // kernelName<<<blocks, threads>>>(arguments);
+    int block_size = 128;
+    int num_blocks = (n + block_size - 1) / block_size;
+    saxpy_kernel<<<num_blocks, block_size>>>(d_y, d_x, d_y, a, n);
+
 
     // TODO: Copy results back to CPU
     // - hipMemcpy
+    HIP_ERRCHK(hipMemcpy(y.data(), d_y, num_bytes, hipMemcpyDeviceToHost));
 
     // TODO: Free device memory
     // - hipFree
+    HIP_ERRCHK(hipFree(d_x));
+    HIP_ERRCHK(hipFree(d_y));
 
     // Check the result of the GPU computation
     printf("reference: %f %f %f %f ... %f %f\n", y_ref[0], y_ref[1], y_ref[2],
