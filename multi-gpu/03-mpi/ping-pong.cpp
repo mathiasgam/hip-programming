@@ -4,6 +4,15 @@
 #include <unistd.h>
 #include <hip/hip_runtime.h>
 
+#define HIP_ERRCHK(result) (hip_errchk(result, __FILE__, __LINE__))
+static inline void hip_errchk(hipError_t result, const char *file, int line) {
+    if (result != hipSuccess) {
+        printf("\n\n%s in %s at line %d\n", hipGetErrorString(result), file,
+               line);
+        exit(EXIT_FAILURE);
+    }
+}
+
 
 /* HIP kernel to increment every element of a vector by one */
 __global__ void add_kernel(double *in, int N)
@@ -32,7 +41,7 @@ void getNodeInfo(int *nodeRank, int *nodeProcs, int *devCount)
     MPI_Comm_size(intranodecomm, nodeProcs);
 
     MPI_Comm_free(&intranodecomm);
-    hipGetDeviceCount(devCount);
+    HIP_ERRCHK(hipGetDeviceCount(devCount));
 }
 
 
@@ -64,18 +73,20 @@ void GPUtoGPUviaHost(int rank, double *hA, double *dA, int N, double &timer)
     double start, stop;
     start = MPI_Wtime();
 
-    // TODO: Implement a GPU-to-GPU ping-pong that communicates via the host,
-    //       but uses the GPU to increment the vector elements. Copy data from
-    //       device to host (and back) and use normal MPI communication on the
-    //       host. Use the HIP kernel add_kernel() to increment values before
-    //       sending them back to rank 0.
     if (rank == 0) {
-        // TODO: Copy vector to host and send it to rank 1
-        // TODO: Receive vector from rank 1 and copy it to the device
+        HIP_ERRCHK(hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost));
+        MPI_Send(hA, N, MPI_DOUBLE, 1, 11, MPI_COMM_WORLD);
+        MPI_Recv(hA, N, MPI_DOUBLE, 1, 12, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        HIP_ERRCHK(hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice));
     } else if (rank == 1) {
-        // TODO: Receive vector from rank 0 and copy it to the device
-        // TODO: Launch kernel to increment values on the GPU
-        // TODO: Copy vector to host and send it to rank 0
+        MPI_Recv(hA, N, MPI_DOUBLE, 0, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        // Increment by one on the CPU
+        HIP_ERRCHK(hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice));
+        int block_size = 256;
+        int num_blocks = (N + block_size - 1) / block_size;
+        add_kernel<<<num_blocks, block_size>>>(dA, N);
+        HIP_ERRCHK(hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost));
+        MPI_Send(hA, N, MPI_DOUBLE, 0, 12, MPI_COMM_WORLD);
     }
 
     stop = MPI_Wtime();
@@ -89,15 +100,16 @@ void GPUtoGPUdirect(int rank, double *dA, int N, double &timer)
     double start, stop;
     start = MPI_Wtime();
 
-    // TODO: Implement a GPU-to-GPU ping-pong that communicates directly
-    //       from GPU memory using HIP-aware MPI.
     if (rank == 0) {
-        // TODO: Send vector to rank 1
-        // TODO: Receive vector from rank 1
+        MPI_Send(dA, N, MPI_DOUBLE, 1, 11, MPI_COMM_WORLD);
+        MPI_Recv(dA, N, MPI_DOUBLE, 1, 12, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     } else if (rank == 1) {
-        // TODO: Receive vector from rank 0
-        // TODO: Launch kernel to increment values on the GPU
-        // TODO: Send vector to rank 0
+        MPI_Recv(dA, N, MPI_DOUBLE, 0, 11, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        int block_size = 256;
+        int num_blocks = (N + block_size - 1) / block_size;
+        add_kernel<<<num_blocks, block_size>>>(dA, N);
+        HIP_ERRCHK(hipStreamSynchronize(0));
+        MPI_Send(dA, N, MPI_DOUBLE, 0, 12, MPI_COMM_WORLD);
     }
 
     stop = MPI_Wtime();
@@ -108,7 +120,7 @@ void GPUtoGPUdirect(int rank, double *dA, int N, double &timer)
 int main(int argc, char *argv[])
 {
     int rank, nprocs, noderank, nodenprocs, devcount;
-    int N = 100;
+    int N = 10000;
     double GPUtime, CPUtime;
     double *dA, *hA;
 
@@ -130,21 +142,26 @@ int main(int argc, char *argv[])
                rank, devcount, noderank % devcount);
     }
 
+    printf("rank: %d, N: %d, gpus: %d\n", rank, N, devcount);
+    fflush(stdout);
+
     // Select the device according to the node rank
-    hipSetDevice(noderank % devcount);
+    HIP_ERRCHK(hipSetDevice(noderank % devcount));
 
     // Allocate enough pinned host and device memory for hA and dA
     // to store N doubles
-    hipHostMalloc((void **) &hA, sizeof(double) * N);
-    hipMalloc((void **) &dA, sizeof(double) * N);
+    HIP_ERRCHK(hipHostMalloc((void **) &hA, sizeof(double) * N));
+    HIP_ERRCHK(hipMalloc((void **) &dA, sizeof(double) * N));
+
 
     // Dummy transfer to remove the overhead of the first communication
     CPUtoCPU(rank, hA, N, CPUtime);
     
     // Initialize the vectors
-    for (int i = 0; i < N; ++i)
+    for (int i = 0; i < N; ++i) {
        hA[i] = 1.0;
-    hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice);
+    }
+    HIP_ERRCHK(hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice));
 
     // CPU-to-CPU test
     CPUtoCPU(rank, hA, N, CPUtime);
@@ -159,14 +176,13 @@ int main(int argc, char *argv[])
     GPUtoGPUdirect(rank, dA, N, GPUtime);
 
     // Re-initialize the vectors
-
     for (int i = 0; i < N; ++i)
        hA[i] = 1.0;
-    hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice);
+    HIP_ERRCHK(hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice));
 
     // GPU-to-GPU test, direct communication with HIP-aware MPI
     GPUtoGPUdirect(rank, dA, N, GPUtime);
-    hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost);
+    HIP_ERRCHK(hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost));
     if (rank == 0) {
         double errorsum = 0;
         for (int i = 0; i < N; ++i)
@@ -180,11 +196,11 @@ int main(int argc, char *argv[])
     // Re-initialize the vectors
     for (int i = 0; i < N; ++i)
        hA[i] = 1.0;
-    hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice);
+    HIP_ERRCHK(hipMemcpy(dA, hA, sizeof(double) * N, hipMemcpyHostToDevice));
 
     // GPU-to-GPU test, communication via host
     GPUtoGPUviaHost(rank, hA, dA, N, GPUtime);
-    hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost);
+    HIP_ERRCHK(hipMemcpy(hA, dA, sizeof(double) * N, hipMemcpyDeviceToHost));
     if (rank == 0) {
         double errorsum = 0;
         for (int i = 0; i < N; ++i)
@@ -193,8 +209,8 @@ int main(int argc, char *argv[])
     }
 
     // Deallocate memory
-    hipHostFree(hA);
-    hipFree(dA);
+    HIP_ERRCHK(hipHostFree(hA));
+    HIP_ERRCHK(hipFree(dA));
 
     MPI_Finalize();
     return 0;
