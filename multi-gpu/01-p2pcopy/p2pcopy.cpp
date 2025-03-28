@@ -3,6 +3,14 @@
 #include <time.h>
 #include <hip/hip_runtime.h>
 
+#define HIP_ERRCHK(result) (hip_errchk(result, __FILE__, __LINE__))
+static inline void hip_errchk(hipError_t result, const char *file, int line) {
+    if (result != hipSuccess) {
+        printf("\n\n%s in %s at line %d\n", hipGetErrorString(result), file,
+               line);
+        exit(EXIT_FAILURE);
+    }
+}
 
 void copyP2P(int p2p, int gpu0, int gpu1, int* dA_0, int* dA_1, int size) {
 
@@ -44,7 +52,7 @@ int main(int argc, char *argv[])
 {
     // Check that we have at least two GPUs
     int devcount;
-    hipGetDeviceCount(&devcount);
+    HIP_ERRCHK(hipGetDeviceCount(&devcount));
     if(devcount < 2) {
         printf("Need at least two GPUs!\n");
         exit(EXIT_FAILURE);
@@ -56,10 +64,10 @@ int main(int argc, char *argv[])
     int size = pow(2, 28);
     int gpu0 = 0, gpu1 = 1;
     int *dA_0, *dA_1;
-    hipSetDevice(gpu0);
-    hipMalloc((void**) &dA_0, size);
-    hipSetDevice(gpu1);
-    hipMalloc((void**) &dA_1, size);
+    HIP_ERRCHK(hipSetDevice(gpu0));
+    HIP_ERRCHK(hipMalloc((void**) &dA_0, size));
+    HIP_ERRCHK(hipSetDevice(gpu1));
+    HIP_ERRCHK(hipMalloc((void**) &dA_1, size));
 
     // Check peer accessibility between GPUs 0 and 1
     int peerAccess01;
@@ -79,6 +87,6 @@ int main(int argc, char *argv[])
     copyP2P(0, gpu0, gpu1, dA_0, dA_1, size);
 
     // Deallocate device memory
-    hipFree(dA_0);
-    hipFree(dA_1);
+    HIP_ERRCHK(hipFree(dA_0));
+    HIP_ERRCHK(hipFree(dA_1));
 }
