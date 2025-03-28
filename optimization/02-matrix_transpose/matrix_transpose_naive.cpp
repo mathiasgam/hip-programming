@@ -3,6 +3,15 @@
 #include <cstdlib>
 #include <vector>
 
+#define ERRCHK(result) (hip_errchk(result, __FILE__, __LINE__))
+static inline void hip_errchk(hipError_t result, const char *file, int line) {
+    if (result != hipSuccess) {
+        printf("\n\n%s in %s at line %d\n", hipGetErrorString(result), file,
+               line);
+        exit(EXIT_FAILURE);
+    }
+}
+
 const static int width = 4096;
 const static int height = 4096;
 const static int tile_dim = 16;
@@ -35,11 +44,11 @@ int main() {
   float *d_in;
   float *d_out;
 
-  hipMalloc((void **)&d_in, width * height * sizeof(float));
-  hipMalloc((void **)&d_out, width * height * sizeof(float));
+  ERRCHK(hipMalloc((void **)&d_in, width * height * sizeof(float)));
+  ERRCHK(hipMalloc((void **)&d_out, width * height * sizeof(float)));
 
-  hipMemcpy(d_in, matrix_in.data(), width * height * sizeof(float),
-            hipMemcpyHostToDevice);
+  ERRCHK(hipMemcpy(d_in, matrix_in.data(), width * height * sizeof(float),
+            hipMemcpyHostToDevice));
 
   printf("Setup complete. Launching kernel \n");
   int block_x = width / tile_dim;
@@ -49,9 +58,9 @@ int main() {
 
   // Create events
   hipEvent_t start_kernel_event;
-  hipEventCreate(&start_kernel_event);
+  ERRCHK(hipEventCreate(&start_kernel_event));
   hipEvent_t end_kernel_event;
-  hipEventCreate(&end_kernel_event);
+  ERRCHK(hipEventCreate(&end_kernel_event));
 
   printf("Warm up the gpu!\n");
 
@@ -62,24 +71,24 @@ int main() {
                       height);}
 
 
-  hipEventRecord(start_kernel_event, 0);
+  ERRCHK(hipEventRecord(start_kernel_event, 0));
   for(int i=1;i<=10;i++){
     hipLaunchKernelGGL(transpose_naive_kernel, dim3(block_x, block_y),
                       dim3(tile_dim, tile_dim), 0, 0, d_in, d_out, width,
                       height);}
   
-  hipEventRecord(end_kernel_event, 0);
-  hipEventSynchronize(end_kernel_event);
+  ERRCHK(hipEventRecord(end_kernel_event, 0));
+  ERRCHK(hipEventSynchronize(end_kernel_event));
 
   float time_kernel;
-  hipEventElapsedTime(&time_kernel, start_kernel_event, end_kernel_event);
+  ERRCHK(hipEventElapsedTime(&time_kernel, start_kernel_event, end_kernel_event));
 
    printf("Kernel execution complete \n");
   printf("Event timings:\n");
   printf("  %.6f ms - naive transpose \n  Bandwidth %.6f GB/s\n", time_kernel/10, 2.0*10000*(((double)(width)*(double)height)*sizeof(float))/(time_kernel*1024*1024*1024));
  
-   hipMemcpy(matrix_out.data(), d_out, width * height * sizeof(float),
-            hipMemcpyDeviceToHost);
+   ERRCHK(hipMemcpy(matrix_out.data(), d_out, width * height * sizeof(float),
+            hipMemcpyDeviceToHost));
 
 
   return 0;
